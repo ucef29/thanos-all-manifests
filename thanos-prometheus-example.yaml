@@ -1,0 +1,1183 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    vault.uw.systems/aws-role: arn:aws:iam::000000000000:role/example-role
+  labels:
+    service: monitoring
+  name: prometheus
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    vault.uw.systems/aws-role: arn:aws:iam::000000000000:role/example-role
+  labels:
+    service: monitoring
+  name: thanos-compact
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    service: monitoring
+  name: thanos-query
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    vault.uw.systems/aws-role: arn:aws:iam::000000000000:role/example-role
+  labels:
+    service: monitoring
+  name: thanos-receive
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    service: monitoring
+  name: thanos-rule
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    vault.uw.systems/aws-role: arn:aws:iam::000000000000:role/example-role
+  labels:
+    service: monitoring
+  name: thanos-store
+---
+apiVersion: v1
+data:
+  prometheus-alerts.yaml: |
+    groups:
+    - name: thanos-rule
+      rules:
+      - alert: ThanosRuleIsDown
+        expr: up{app="thanos-rule"} == 0 or absent(up{app="thanos-rule"})
+        for: 10m
+        annotations:
+          summary: Thanos Rule is down
+          impact: Telecom alerts are not working
+          action: 'check {{ $labels.kubernetes_pod_name }} pod in {{ $labels.kubernetes_namespace}} namespace'
+kind: ConfigMap
+metadata:
+  name: alerts-f5cm76f42f
+---
+apiVersion: v1
+data:
+  prometheus.yaml.tmpl: |
+    global:
+      external_labels:
+        monitor: prometheus
+        replica: $(HOSTNAME)
+      scrape_interval:     30s
+      evaluation_interval: 60s
+      scrape_timeout: 15s
+    rule_files:
+      - "/etc/alerts/*.yaml"
+    alerting:
+      alertmanagers:
+      - dns_sd_configs:
+        - port: 9093
+          type: "A"
+          names:
+          - alertmanager.sys-mon
+    scrape_configs:
+    - job_name: 'prometheus'
+      scheme: http
+      static_configs:
+      - targets:
+        - localhost:9090
+kind: ConfigMap
+metadata:
+  name: prometheus-m5k9kt9hmt
+---
+apiVersion: v1
+data:
+  store-sd.yaml: |
+    # Store targets for thanos-query to use for searching
+    - targets:
+      # Prometheus sidecars for the short term metrics
+      - prometheus-0.thanos-sidecar:10901
+      - prometheus-1.thanos-sidecar:10901
+      # Thanos Receive store gateway for short term metrics
+      - thanos-receive:10901
+      # Store gateway for long term metrics
+      - thanos-store:10901
+      # Thanos ruler exposes synthetic time series of the form
+      # ```
+      # ALERTS{alertname="<alert name>", alertstate="pending|firing", <additional # alert labels>}
+      # ```
+      # The sample value is set to 1 as long as the alert is in the indicated
+      # active (pending or firing) state, and the series is marked stale when this is
+      # no longer the case.
+      - thanos-rule:10901
+    # Another instance of Prometheus/Thanos to be included in the queries
+    - targets:
+      - prometheus-0.thanos-sidecar.example-namespace:10901
+      - prometheus-1.thanos-sidecar.example-namespace:10901
+      - thanos-store.example-namespace:10901
+kind: ConfigMap
+metadata:
+  name: thanos-query-mbgfd9k64h
+---
+apiVersion: v1
+data:
+  thanos-rule.yaml: |
+    groups:
+    - name: thanos-rule
+      rules:
+      - alert: ThanosRuleIsDown
+        expr: up{app="thanos-rule"} == 0 or absent(up{app="thanos-rule"})
+        for: 10m
+        annotations:
+          summary: Thanos Rule is down
+          impact: Telecom alerts are not working
+          action: 'check {{ $labels.kubernetes_pod_name }} pod in {{ $labels.kubernetes_namespace}} namespace'
+      - alert: ThanosRuleIsDroppingAlerts
+        expr: rate(thanos_alert_queue_alerts_dropped_total{app="thanos-rule"}[5m]) > 0
+        for: 10m
+        annotations:
+          summary: Thanos Rule is dropping alerts
+          impact: Telecom alerts are not working
+          action: 'check {{ $labels.kubernetes_pod_name }} pod logs in {{ $labels.kubernetes_namespace}} namespace'
+kind: ConfigMap
+metadata:
+  name: thanos-rule-alerts-t52hhhf7hb
+---
+apiVersion: v1
+data:
+  query-sd.yaml: |
+    - targets:
+      - thanos-query.namespace:9090
+      labels:
+        team: infra
+kind: ConfigMap
+metadata:
+  name: thanos-rule-bh5ghc6hhh
+---
+apiVersion: v1
+data:
+  config.yaml: |
+    type: S3
+    config:
+      bucket: "bucket-name"
+      endpoint: "s3.eu-west-1.amazonaws.com"
+      sse_config:
+        type: SSE-S3
+kind: ConfigMap
+metadata:
+  name: thanos-storage-dm5b8d6gmt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "10902"
+    prometheus.io/scrape: "true"
+    traefik.ingress.kubernetes.io/affinity: "true"
+  labels:
+    name: prometheus
+    service: monitoring
+  name: prometheus
+spec:
+  ports:
+  - name: prometheus
+    port: 9090
+    protocol: TCP
+    targetPort: 9090
+  selector:
+    app: prometheus
+    service: monitoring
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "10902"
+    prometheus.io/scrape: "true"
+  labels:
+    app: thanos-compact
+    service: monitoring
+  name: thanos-compact
+spec:
+  ports:
+  - name: http-query
+    port: 10902
+    protocol: TCP
+    targetPort: http
+  selector:
+    app: thanos-compact
+    service: monitoring
+  sessionAffinity: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "10902"
+    prometheus.io/scrape: "true"
+  labels:
+    app: thanos-query
+    service: monitoring
+  name: thanos-query
+spec:
+  ports:
+  - name: http
+    port: 9090
+    protocol: TCP
+    targetPort: http
+  - name: grpc
+    port: 10901
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app: thanos-query
+    service: monitoring
+  sessionAffinity: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "10902"
+    prometheus.io/scrape: "true"
+  labels:
+    app.kubernetes.io/name: thanos-receive
+    service: monitoring
+  name: thanos-receive
+spec:
+  clusterIP: None
+  ports:
+  - name: grpc
+    port: 10901
+    targetPort: grcp
+  - name: http
+    port: 10902
+    targetPort: http
+  - name: remote-write
+    port: 19291
+    targetPort: remote-write
+  selector:
+    app.kubernetes.io/name: thanos-receive
+    service: monitoring
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "10902"
+    prometheus.io/scrape: "true"
+  labels:
+    app: thanos-rule
+    service: monitoring
+  name: thanos-rule
+spec:
+  ports:
+  - name: http-rule
+    port: 10902
+    protocol: TCP
+    targetPort: http
+  - name: grpc-rule
+    port: 10901
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app: thanos-rule
+    service: monitoring
+  sessionAffinity: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    name: thanos-sidecar
+    service: monitoring
+  name: thanos-sidecar
+spec:
+  clusterIP: None
+  ports:
+  - name: grpc
+    port: 10901
+  selector:
+    app: prometheus
+    service: monitoring
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "10902"
+    prometheus.io/scrape: "true"
+  labels:
+    app: thanos-store
+    service: monitoring
+  name: thanos-store
+spec:
+  ports:
+  - port: 10901
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app: thanos-store
+    service: monitoring
+  sessionAffinity: None
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: thanos-store
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: memcached
+    helm.sh/chart: memcached-6.3.0
+    service: monitoring
+  name: thanos-store-memcached
+spec:
+  ports:
+  - name: memcache
+    nodePort: null
+    port: 11211
+    targetPort: memcache
+  selector:
+    app.kubernetes.io/instance: thanos-store
+    app.kubernetes.io/name: memcached
+    service: monitoring
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/instance: thanos-store
+    app.kubernetes.io/name: memcached
+    service: monitoring
+  name: thanos-store-memcached-peers
+spec:
+  clusterIP: None
+  ports:
+  - name: memcache
+    nodePort: null
+    port: 11211
+    targetPort: memcache
+  selector:
+    app.kubernetes.io/instance: thanos-store
+    app.kubernetes.io/name: memcached
+    service: monitoring
+  sessionAffinity: None
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    service: monitoring
+  name: thanos-compact
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    service: monitoring
+  name: thanos-compact
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: thanos-compact
+      app.kubernetes.io/name: thanos-compact
+      service: monitoring
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      annotations:
+        injector.tumblr.com/request: vault-sidecar-aws
+      labels:
+        app: thanos-compact
+        app.kubernetes.io/name: thanos-compact
+        service: monitoring
+      name: thanos-compact
+    spec:
+      containers:
+      - args:
+        - compact
+        - --block-viewer.global.sync-block-interval=1h
+        - --data-dir=/var/thanos/compact
+        - --delete-delay=48h
+        - --log.level=warn
+        - --objstore.config-file=/etc/thanos/config.yaml
+        - --retention.resolution-1h=1y
+        - --retention.resolution-5m=1y
+        - --retention.resolution-raw=1y
+        - --wait
+        - --wait-interval=1h
+        image: quay.io/thanos/thanos:v0.30.1
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /-/healthy
+            port: http
+            scheme: HTTP
+          periodSeconds: 90
+          successThreshold: 1
+          timeoutSeconds: 10
+        name: thanos-compact
+        ports:
+        - containerPort: 10902
+          name: http
+        readinessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /-/ready
+            port: http
+            scheme: HTTP
+          periodSeconds: 90
+          successThreshold: 1
+          timeoutSeconds: 10
+        resources:
+          limits:
+            memory: 2Gi
+          requests:
+            cpu: 0
+            memory: 50Mi
+        volumeMounts:
+        - mountPath: /var/thanos/compact
+          name: data
+        - mountPath: /etc/thanos
+          name: thanos-storage
+      serviceAccountName: thanos-compact
+      terminationGracePeriodSeconds: 1200
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: thanos-compact
+      - configMap:
+          name: thanos-storage-dm5b8d6gmt
+        name: thanos-storage
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: thanos-query
+    app.kubernetes.io/name: thanos-query
+    service: monitoring
+  name: thanos-query
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: thanos-query
+      app.kubernetes.io/name: thanos-query
+      service: monitoring
+  template:
+    metadata:
+      labels:
+        app: thanos-query
+        app.kubernetes.io/name: thanos-query
+        service: monitoring
+    spec:
+      containers:
+      - args:
+        - query
+        - --log.level=warn
+        - --query.auto-downsampling
+        - --query.promql-engine=thanos
+        - --query.replica-label=replica
+        - --store.response-timeout=15s
+        - --store.sd-files=/etc/thanos/store-sd.yaml
+        image: quay.io/thanos/thanos:v0.30.1
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /-/healthy
+            port: http
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: thanos-query
+        ports:
+        - containerPort: 10902
+          name: http
+        - containerPort: 10901
+          name: grpc
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /-/ready
+            port: http
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            memory: 4000Mi
+          requests:
+            cpu: 50m
+            memory: 500Mi
+        volumeMounts:
+        - mountPath: /etc/thanos
+          name: config
+      serviceAccountName: thanos-query
+      volumes:
+      - configMap:
+          name: thanos-query-mbgfd9k64h
+        name: config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: thanos-rule
+    app.kubernetes.io/name: thanos-rule
+    service: monitoring
+  name: thanos-rule
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: thanos-rule
+      app.kubernetes.io/name: thanos-rule
+      service: monitoring
+  template:
+    metadata:
+      labels:
+        app: thanos-rule
+        app.kubernetes.io/name: thanos-rule
+        service: monitoring
+    spec:
+      containers:
+      - args:
+        - rule
+        - --log.level=warn
+        - --data-dir=/var/thanos/data/
+        - --rule-file=/var/thanos/rules/*.yaml
+        - --alertmanagers.url=$(ALERTMANAGER_URL)
+        - --eval-interval=30s
+        - --alert.query-url=$(THANOS_QUERY_URL)
+        - --query.sd-files=/etc/thanos/query-sd.yaml
+        env:
+        - name: ALERTMANAGER_URL
+          value: dns+http://alertmanager.overlay-namespace
+        - name: THANOS_QUERY_URL
+          value: https://thanos-query.overlay.example.com
+        image: quay.io/thanos/thanos:v0.30.1
+        livenessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /-/healthy
+            port: http
+            scheme: HTTP
+          periodSeconds: 15
+          successThreshold: 1
+          timeoutSeconds: 10
+        name: thanos-rule
+        ports:
+        - containerPort: 10902
+          name: http
+        - containerPort: 10901
+          name: grpc
+        readinessProbe:
+          failureThreshold: 5
+          httpGet:
+            path: /-/ready
+            port: http
+            scheme: HTTP
+          periodSeconds: 15
+          successThreshold: 1
+          timeoutSeconds: 10
+        resources:
+          limits:
+            memory: 500Mi
+          requests:
+            cpu: 50m
+            memory: 200Mi
+        volumeMounts:
+        - mountPath: /var/thanos/data
+          name: data
+        - mountPath: /var/thanos/rules
+          name: rules
+        - mountPath: /etc/thanos
+          name: config
+      serviceAccountName: thanos-rule
+      volumes:
+      - emptyDir: {}
+        name: data
+      - configMap:
+          defaultMode: 420
+          name: alerts-f5cm76f42f
+        name: rules
+      - configMap:
+          name: thanos-rule-bh5ghc6hhh
+        name: config
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: prometheus
+    app.kubernetes.io/name: prometheus
+    role: prometheus
+    service: monitoring
+  name: prometheus
+spec:
+  podManagementPolicy: Parallel
+  replicas: 2
+  selector:
+    matchLabels:
+      app: prometheus
+      app.kubernetes.io/name: prometheus
+      role: prometheus
+      service: monitoring
+  serviceName: prometheus
+  template:
+    metadata:
+      annotations:
+        injector.tumblr.com/request: vault-sidecar-aws
+      labels:
+        app: prometheus
+        app.kubernetes.io/name: prometheus
+        role: prometheus
+        service: monitoring
+      name: prometheus
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - prometheus
+              topologyKey: kubernetes.io/hostname
+            weight: 100
+      containers:
+      - args:
+        - --log.level=warn
+        - --config.file=/etc/prometheus-shared/prometheus.yaml
+        - --storage.tsdb.path=/prometheus/data
+        - --storage.tsdb.retention.time=$(PROMETHEUS_DB_RETENTION)
+        - --storage.tsdb.min-block-duration=2h
+        - --storage.tsdb.max-block-duration=2h
+        - --web.external-url=$(PROMETHEUS_URL)
+        - --web.enable-lifecycle
+        - --web.console.libraries=/usr/share/prometheus/console_libraries
+        - --web.console.templates=/usr/share/prometheus/consoles
+        env:
+        - name: PROMETHEUS_URL
+          value: https://prometheus.overlay.aws.example.com
+        - name: PROMETHEUS_DB_RETENTION
+          value: 2d
+        image: prom/prometheus:v2.41.0
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /-/healthy
+            port: web
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 1
+        name: prometheus
+        ports:
+        - containerPort: 9090
+          name: web
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /-/ready
+            port: web
+            scheme: HTTP
+          periodSeconds: 60
+          successThreshold: 1
+          timeoutSeconds: 1
+        resources:
+          limits:
+            memory: 4000Mi
+          requests:
+            cpu: 50m
+            memory: 1500Mi
+        volumeMounts:
+        - mountPath: /etc/prometheus
+          name: config-volume
+        - mountPath: /etc/prometheus-shared
+          name: config-shared
+        - mountPath: /etc/alerts
+          name: alerts-volume
+        - mountPath: /prometheus
+          name: prometheus
+      - args:
+        - sidecar
+        - --log.level=warn
+        - --prometheus.url=http://127.0.0.1:9090
+        - --reloader.config-file=/etc/prometheus/prometheus.yaml.tmpl
+        - --reloader.config-envsubst-file=/etc/prometheus-shared/prometheus.yaml
+        - --tsdb.path=/prometheus/data
+        - --objstore.config-file=/etc/thanos/config.yaml
+        image: quay.io/thanos/thanos:v0.30.1
+        name: thanos-sidecar
+        ports:
+        - containerPort: 10902
+          name: http
+        - containerPort: 10901
+          name: grpc
+        resources:
+          limits:
+            memory: 256Mi
+          requests:
+            cpu: 0m
+            memory: 32Mi
+        volumeMounts:
+        - mountPath: /prometheus
+          name: prometheus
+        - mountPath: /etc/prometheus-shared
+          name: config-shared
+        - mountPath: /etc/prometheus
+          name: config-volume
+        - mountPath: /etc/alerts
+          name: alerts-volume
+        - mountPath: /etc/thanos
+          name: thanos-storage
+      securityContext:
+        runAsUser: 0
+      serviceAccountName: prometheus
+      terminationGracePeriodSeconds: 1200
+      volumes:
+      - configMap:
+          defaultMode: 420
+          name: prometheus-m5k9kt9hmt
+        name: config-volume
+      - configMap:
+          defaultMode: 420
+          name: thanos-rule-alerts-t52hhhf7hb
+        name: alerts-volume
+      - emptyDir: {}
+        name: config-shared
+      - configMap:
+          name: thanos-storage-dm5b8d6gmt
+        name: thanos-storage
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        service: monitoring
+      name: prometheus
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 200Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/name: thanos-receive
+    service: monitoring
+  name: thanos-receive
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thanos-receive
+      service: monitoring
+  serviceName: thanos-receive
+  template:
+    metadata:
+      annotations:
+        injector.tumblr.com/request: vault-sidecar-aws
+      labels:
+        app.kubernetes.io/name: thanos-receive
+        service: monitoring
+    spec:
+      containers:
+      - args:
+        - receive
+        - --log.level=warn
+        - --tsdb.path=/var/thanos/receive
+        - --label=receive_replica="$(NAME)"
+        - --objstore.config-file=/etc/thanos/config.yaml
+        env:
+        - name: NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        image: quay.io/thanos/thanos:v0.30.1
+        livenessProbe:
+          failureThreshold: 25
+          httpGet:
+            path: /-/healthy
+            port: http
+            scheme: HTTP
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 10
+        name: thanos-receive
+        ports:
+        - containerPort: 10902
+          name: http
+        - containerPort: 10901
+          name: grpc
+        - containerPort: 19291
+          name: remote-write
+        readinessProbe:
+          failureThreshold: 25
+          httpGet:
+            path: /-/ready
+            port: http
+            scheme: HTTP
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 10
+        resources:
+          limits:
+            memory: 4000Mi
+          requests:
+            cpu: 0m
+            memory: 500Mi
+        volumeMounts:
+        - mountPath: /var/thanos/receive
+          name: data
+        - mountPath: /etc/thanos
+          name: thanos-storage
+      serviceAccountName: thanos-receive
+      volumes:
+      - configMap:
+          name: thanos-storage-dm5b8d6gmt
+        name: thanos-storage
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        service: monitoring
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 50Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: thanos-store
+    app.kubernetes.io/name: thanos-store
+    service: monitoring
+  name: thanos-store
+spec:
+  podManagementPolicy: Parallel
+  replicas: 2
+  selector:
+    matchLabels:
+      app: thanos-store
+      app.kubernetes.io/name: thanos-store
+      service: monitoring
+  serviceName: thanos-store
+  template:
+    metadata:
+      annotations:
+        injector.tumblr.com/request: vault-sidecar-aws
+      labels:
+        app: thanos-store
+        app.kubernetes.io/name: thanos-store
+        service: monitoring
+    spec:
+      containers:
+      - args:
+        - store
+        - --log.level=warn
+        - --data-dir=/var/thanos/store
+        - --objstore.config-file=/etc/thanos/config.yaml
+        - |-
+          --index-cache.config="config":
+            "addresses":
+            - "dnssrv+_memcache._tcp.$(MEMCACHED_SVC)"
+            "dns_provider_update_interval": "10s"
+            "max_async_buffer_size": 10000
+            "max_async_concurrency": 20
+            "max_get_multi_batch_size": 0
+            "max_get_multi_concurrency": 100
+            "max_idle_connections": 100
+            "max_item_size": "1MiB"
+            "timeout": "500ms"
+          "type": "memcached"
+        - |-
+          --store.caching-bucket.config="blocks_iter_ttl": "5m"
+          "chunk_object_attrs_ttl": "24h"
+          "chunk_subrange_size": 16000
+          "chunk_subrange_ttl": "24h"
+          "config":
+            "addresses":
+            - "dnssrv+_memcache._tcp.$(MEMCACHED_SVC)"
+            "dns_provider_update_interval": "10s"
+            "max_async_buffer_size": 10000
+            "max_async_concurrency": 20
+            "max_get_multi_batch_size": 0
+            "max_get_multi_concurrency": 100
+            "max_idle_connections": 100
+            "max_item_size": "1MiB"
+            "timeout": "500ms"
+          "max_chunks_get_range_requests": 3
+          "metafile_content_ttl": "24h"
+          "metafile_doesnt_exist_ttl": "15m"
+          "metafile_exists_ttl": "2h"
+          "metafile_max_size": "1MiB"
+          "type": "memcached"
+        env:
+        - name: MEMCACHED_SVC
+          value: thanos-store-memcached-peers
+        image: quay.io/thanos/thanos:v0.30.1
+        livenessProbe:
+          failureThreshold: 25
+          httpGet:
+            path: /-/healthy
+            port: http
+            scheme: HTTP
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 10
+        name: thanos-store
+        ports:
+        - containerPort: 10902
+          name: http
+        - containerPort: 10901
+          name: grpc
+        readinessProbe:
+          failureThreshold: 25
+          httpGet:
+            path: /-/ready
+            port: http
+            scheme: HTTP
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 10
+        resources:
+          limits:
+            memory: 4000Mi
+          requests:
+            cpu: 0m
+            memory: 500Mi
+        volumeMounts:
+        - mountPath: /var/thanos/store
+          name: data
+        - mountPath: /etc/thanos
+          name: thanos-storage
+      serviceAccountName: thanos-store
+      volumes:
+      - configMap:
+          name: thanos-storage-dm5b8d6gmt
+        name: thanos-storage
+  volumeClaimTemplates:
+  - metadata:
+      labels:
+        service: monitoring
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 50Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app.kubernetes.io/instance: thanos-store
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: memcached
+    helm.sh/chart: memcached-6.3.0
+    service: monitoring
+  name: thanos-store-memcached
+spec:
+  podManagementPolicy: Parallel
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: thanos-store
+      app.kubernetes.io/name: memcached
+      service: monitoring
+  serviceName: thanos-store-memcached
+  template:
+    metadata:
+      annotations: null
+      labels:
+        app.kubernetes.io/instance: thanos-store
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/name: memcached
+        helm.sh/chart: memcached-6.3.0
+        service: monitoring
+    spec:
+      affinity:
+        nodeAffinity: null
+        podAffinity: null
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/instance: thanos-store
+                  app.kubernetes.io/name: memcached
+                  service: monitoring
+              namespaces:
+              - default
+              topologyKey: kubernetes.io/hostname
+            weight: 1
+      containers:
+      - args:
+        - /run.sh
+        - --memory-file=/cache-state/memory_file
+        env:
+        - name: BITNAMI_DEBUG
+          value: "false"
+        - name: MEMCACHED_PORT_NUMBER
+          value: "11211"
+        image: docker.io/bitnami/memcached:1.6.17-debian-11-r15
+        imagePullPolicy: IfNotPresent
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /bin/bash
+              - -ec
+              - |
+                /usr/bin/pkill -10 memcached
+                sleep 60s
+        livenessProbe:
+          failureThreshold: 6
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          successThreshold: 1
+          tcpSocket:
+            port: memcache
+          timeoutSeconds: 5
+        name: memcached
+        ports:
+        - containerPort: 11211
+          name: memcache
+        readinessProbe:
+          failureThreshold: 6
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          tcpSocket:
+            port: memcache
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: 2
+            memory: 1Gi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+        volumeMounts:
+        - mountPath: /cache-state
+          name: data
+        - mountPath: /tmp
+          name: tmp
+      initContainers: []
+      securityContext:
+        fsGroup: 1001
+      serviceAccountName: default
+      volumes:
+      - emptyDir: {}
+        name: tmp
+  updateStrategy:
+    rollingUpdate: {}
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - metadata:
+      annotations: null
+      labels:
+        service: monitoring
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    service: monitoring
+  name: prometheus
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: prometheus
+      service: monitoring
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: prometheus
+spec:
+  rules:
+  - host: prometheus.example.com
+    http:
+      paths:
+      - backend:
+          serviceName: prometheus
+          servicePort: 9090
+        path: /
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: thanos-query
+spec:
+- host: thanos-query.example.com
+  http:
+    paths:
+    - backend:
+        serviceName: thanos-query
+        servicePort: 9090
+      path: /
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: thanos-rule
+spec:
+  rules:
+  - host: thanos-rule.base.example.com
+    http:
+      paths:
+      - backend:
+          serviceName: thanos-rule
+          servicePort: 10902
+        path: /
